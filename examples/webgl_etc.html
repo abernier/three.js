@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+  <link type="text/css" rel="stylesheet" href="main.css">
+</head>
+<body>
+
+  <div id="container"></div>
+
+  <!-- Import maps polyfill -->
+  <!-- Remove this when import maps will be widely supported -->
+  <script async src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"></script>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "../build/three.module.js",
+        "three/addons/": "./jsm/"
+      }
+    }
+  </script>
+
+<script type="x-shader/x-vertex" id="vertexshader">
+uniform float scale;
+
+attribute float size;
+attribute vec3 color;
+
+varying vec3 c;
+
+void main() {
+    c = color;
+
+    // https://youtu.be/Sukvxf7FfYM?t=896
+    vec4 localPosition = vec4(position, 1.0);
+    vec4 worldPosition = modelMatrix * localPosition;
+    vec4 viewPosition = viewMatrix * worldPosition;
+    vec4 clipPosition = projectionMatrix * viewPosition;
+    gl_Position = clipPosition;
+
+    gl_PointSize = size;
+    gl_PointSize *= ( scale / - viewPosition.z ); // https://discourse.threejs.org/t/scaling-particles-based-on-camera-distance/5818/3
+}
+</script>
+
+<script type="x-shader/x-fragment" id="fragmentshader">
+varying  vec3 c;
+
+void main() {
+    // https://www.desultoryquest.com/blog/drawing-anti-aliased-circular-points-using-opengl-slash-webgl/
+    float r = 0.0, delta = 0.0, alpha = 1.0;
+    vec2 cxy = 2.0 * gl_PointCoord - 1.0;
+    r = dot(cxy, cxy);
+    if (r > 1.0) {
+        discard;
+    }
+    gl_FragColor = vec4(c, 1.0) * (alpha);
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+import Stats from 'three/addons/libs/stats.module.js';
+import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+import { SimplexNoise } from 'three/addons/math/SimplexNoise.js';
+
+window.THREE = THREE
+
+function rand(from = 0, to = 1) {
+  return Math.random()*(to-from)+from;
+}
+
+const conf = {
+  numpoints: 0.5e6,
+  shadows: true,
+  fov: 60,
+  near: 0.0001,
+  far: 10000,
+  cameraZ: 100,
+  orbitMinDistance: 1,
+  orbitMaxDistance: 10,
+  batchsize: 1,
+  pointMinSize: .7,
+  pointMaxSize: 1,
+  penMaxSpeed: .05,
+  penSize: .3, // debug
+  pointsPerSec: 4,
+  pointsToZoomOn: 30,
+  cameraTargetLerp: 0.005,
+  cameraPositionLerp: 0.001,
+}
+
+const feat = {}
+if (location.search.includes('feat-depth')) feat.depth = true;
+
+var container
+
+var scene, camera, renderer, controls;
+
+var pointCloud, pen;
+var t = 0;
+var sphereOfInterest;
+var planeFrom3LastPoints;
+
+var stats;
+var gui;
+
+// ?debug param
+const debug = location.search.includes('debug')
+console.log('debug', debug)
+
+// ?eco param
+const eco = location.search.includes('eco')
+console.log('eco', eco)
+
+/*
+   ######   ##     ## #### 
+  ##    ##  ##     ##  ##  
+  ##        ##     ##  ##  
+  ##   #### ##     ##  ##  
+  ##    ##  ##     ##  ##  
+  ##    ##  ##     ##  ##  
+  ######    #######  #### 
+  */
+
+ if (debug) {
+  gui = new GUI();
+
+  // gui.add(conf, 'fov', 1, 150).onChange(function (val) {
+  //   camera.fov = val
+  //   camera.updateProjectionMatrix()
+  // });
+
+  gui.add(conf, 'pointsToZoomOn', 1, 100, 10)
+
+  gui.add(conf, 'cameraTargetLerp', 0.001, .01)
+  gui.add(conf, 'cameraPositionLerp', 0.001, .01)
+
+  gui.open();
+}
+
+class Pen {
+  constructor(scene) {
+    this.r = conf.penSize
+
+    const geometry = new THREE.CircleGeometry( this.r, 32 );
+    const material = new THREE.MeshBasicMaterial( { color: 0xffff00, opacity: (true || debug ? .5 : 0), transparent: true } );
+    const mesh = new THREE.Mesh( geometry, material );
+
+    this.mesh = mesh
+    this.vel = new THREE.Vector3(0, 0, 0)
+
+    const simplex = new SimplexNoise();
+    this.simplex = simplex
+    console.log('simplex', simplex)
+  }
+
+  update() {
+    t += 0.003
+
+    const offset = 5
+    const noises = [
+      this.simplex.noise(0+0*offset, t),     // [-1;1]
+      this.simplex.noise(0+1*offset, t), // [-1;1]
+      this.simplex.noise(0+2*offset, t), // [-1;1]
+    ]
+    // console.log('noises', noises)
+
+    const angles = noises.map(noise => noise*Math.PI).slice(0, 3)
+    const a = new THREE.Euler(...angles);
+    const b = new THREE.Vector3(1, 1, 1);
+    b.applyEuler(a).multiplyScalar(conf.penMaxSpeed); // max pen speed
+    this.vel = b
+    // debugger
+
+    // const x = this.mesh.position.x + this.vel.x
+
+    this.mesh.position.add(this.vel)
+    if (!feat.depth) this.mesh.position.z = 0 // flatenize
+
+    this.mesh.quaternion.copy(camera.quaternion)
+  }
+}
+
+function init() {
+  console.log('init')
+
+  container = document.getElementById( 'container' );
+
+  /*
+   ######   ######  ######## ##    ## ######## 
+  ##    ## ##    ## ##       ###   ## ##       
+  ##       ##       ##       ####  ## ##       
+   ######  ##       ######   ## ## ## ######   
+        ## ##       ##       ##  #### ##       
+  ##    ## ##    ## ##       ##   ### ##       
+   ######   ######  ######## ##    ## ######## 
+  */
+
+  scene = new THREE.Scene();
+  // scene.fog = new THREE.FogExp2( 0x000000, 0.001 );
+  globalThis.scene = scene
+
+  scene.background = new THREE.Color(0xdddddd);
+  
+  debug && scene.add( new THREE.AxesHelper(1) );
+
+  //
+  // pen
+  //
+
+  pen = new Pen()
+  scene.add(pen.mesh)
+
+  /*
+  ########  ######## ##    ## ########  ######## ########  ######## ########  
+  ##     ## ##       ###   ## ##     ## ##       ##     ## ##       ##     ## 
+  ##     ## ##       ####  ## ##     ## ##       ##     ## ##       ##     ## 
+  ########  ######   ## ## ## ##     ## ######   ########  ######   ########  
+  ##   ##   ##       ##  #### ##     ## ##       ##   ##   ##       ##   ##   
+  ##    ##  ##       ##   ### ##     ## ##       ##    ##  ##       ##    ##  
+  ##     ## ######## ##    ## ########  ######## ##     ## ######## ##     ## 
+  */
+
+  renderer = new THREE.WebGLRenderer( { antialias: !eco } );
+  globalThis.renderer = renderer
+
+  if (!eco) {
+    renderer.setPixelRatio( window.devicePixelRatio );
+  }
+  renderer.setSize( window.innerWidth, window.innerHeight );
+  // renderer.shadowMap.enabled = conf.shadows;
+  container.appendChild(renderer.domElement);
+
+  stats = new Stats();
+  debug && container.appendChild( stats.dom );
+
+  /*
+   ######     ###    ##     ## ######## ########     ###    
+  ##    ##   ## ##   ###   ### ##       ##     ##   ## ##   
+  ##        ##   ##  #### #### ##       ##     ##  ##   ##  
+  ##       ##     ## ## ### ## ######   ########  ##     ## 
+  ##       ######### ##     ## ##       ##   ##   ######### 
+  ##    ## ##     ## ##     ## ##       ##    ##  ##     ## 
+  ######  ##     ## ##     ## ######## ##     ## ##     ## 
+  */
+
+  camera = new THREE.PerspectiveCamera(conf.fov, window.innerWidth/window.innerHeight, conf.near, conf.far);
+  globalThis.camera = camera
+
+  camera.position.x = 0;
+  camera.position.y = 0;
+  camera.position.z = conf.cameraZ;
+  // camera.lookAt(scene.position)
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  globalThis.controls = controls
+
+  // controls.addEventListener( 'change', render ); // use if there is no animation loop
+  // controls.minDistance = conf.orbitMinDistance;
+  // controls.maxDistance = conf.orbitMaxDistance;
+  controls.enableDamping = true;
+  // controls.update(); // controls.update() must be called after any manual changes to the camera's transform
+  
+  debug && scene.add(new THREE.AxesHelper(1));
+
+
+  {
+    // const geometry = new THREE.BoxGeometry();
+    // const material = new THREE.MeshLambertMaterial( { color: Math.random() * 0xffffff } )
+    // const cube = new THREE.Mesh( geometry, material );
+    // scene.add( cube );
+
+    const NUM_POINTS = conf.numpoints
+    
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array( NUM_POINTS * 3), 3));
+    geometry.setAttribute("size", new THREE.BufferAttribute(new Float32Array(NUM_POINTS * 1), 1));
+    geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array( NUM_POINTS * 3 ), 3));
+
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        scale: { type: "f", value: renderer.domElement.height/2 } // `scale` https://discourse.threejs.org/t/scaling-particles-based-on-camera-distance/5818/8
+      },
+      vertexShader: document.getElementById('vertexshader').textContent,
+      fragmentShader: document.getElementById('fragmentshader').textContent,
+    });
+    // const material = new THREE.PointsMaterial({
+    //   color: 0x000000,
+    //   size: 1,
+    //   // size: 1/window.devicePixelRatio * rand(1,2),
+    //   // sizeAttenuation: false,
+    //   opacity: 1
+    // });
+    // const sprite = new THREE.TextureLoader().load( 'textures/sprites/disc.png' );
+    // const material = new THREE.PointsMaterial( { size: 1, sizeAttenuation: true, map: sprite, alphaTest: 0.5, transparent: true } );
+		// material.color.setHSL( 1.0, 0.3, 0 );
+
+    pointCloud = new THREE.Points(geometry, material);
+    pointCloud.frustumCulled = false // see: https://stackoverflow.com/a/32876611/133327
+    window.pointCloud = pointCloud
+    scene.add(pointCloud);
+
+    let i = 0
+    window.numpoints = 0
+    const int = setInterval(function () {
+      const position = pointCloud.geometry.attributes.position.array
+      const size = pointCloud.geometry.attributes.size.array
+      const color = pointCloud.geometry.attributes.color.array
+
+      for (let j = 0; j < conf.batchsize; j++) {
+        const x = pen.mesh.position.x// + 2*(Math.random()-.5)*pen.r;
+        const y = pen.mesh.position.y// + 2*(Math.random()-.5)*pen.r;
+        const z = pen.mesh.position.z// + 2*(Math.random()-.5)*pen.r;
+
+        position[i+0] = x;
+        position[i+1] = y;
+        position[i+2] = z;
+
+        const s = rand(conf.pointMinSize, conf.pointMaxSize) // [0.3; 5]
+        size[window.numpoints] = s
+
+        // gray
+        color[i+0] = rand(0, .4);
+        color[i+1] = color[i+0];
+        color[i+2] = color[i+0];
+
+        i += 3
+        window.numpoints++
+      }
+
+      pointCloud.geometry.attributes.position.needsUpdate = true;	
+      pointCloud.geometry.setDrawRange(0, i) // optim: only draw the defined points
+      pointCloud.geometry.attributes.size.needsUpdate = true;
+      pointCloud.geometry.attributes.color.needsUpdate = true;
+
+      //
+      // sphere of interest (from the last X points)
+      //
+
+      const to = pointCloud.geometry.drawRange.count
+      let from = to - conf.pointsToZoomOn*3
+      if (from < 0) from = 0
+      // console.log(from, to)
+      const coords = pointCloud.geometry.attributes.position.array.slice(from, to)
+      const points = [] // last X points added
+      // console.log('points', points)
+      for (let i = 0; i< coords.length; i+=3) points.push(new THREE.Vector3(coords[i], coords[i+1], coords[i+2]))
+      sphereOfInterest = new THREE.Sphere()
+      sphereOfInterest.setFromPoints(points)
+      // console.log('sphere center', sphereOfInterest.center)
+      // console.log('sphere radius', sphereOfInterest.radius)
+
+      const last3points = points.slice(-3)
+      if (last3points.length === 3) {
+        planeFrom3LastPoints = new THREE.Plane()
+        planeFrom3LastPoints.setFromCoplanarPoints(...last3points) // plane from 3 last point
+        planeFrom3LastPoints.normal.setZ(-Math.abs(planeFrom3LastPoints.normal.z))
+        console.log(planeFrom3LastPoints.normal.z)
+      }
+      
+      
+
+      if (numpoints > NUM_POINTS) clearInterval(int) // stop
+    }, 1000/conf.pointsPerSec)
+  }
+
+}
+
+/*
+########  ######## ##    ## ########  ######## ########  
+##     ## ##       ###   ## ##     ## ##       ##     ## 
+##     ## ##       ####  ## ##     ## ##       ##     ## 
+########  ######   ## ## ## ##     ## ######   ########  
+##   ##   ##       ##  #### ##     ## ##       ##   ##   
+##    ##  ##       ##   ### ##     ## ##       ##    ##  
+##     ## ######## ##    ## ########  ######## ##     ## 
+*/
+
+function onWindowResize() {
+  console.log('just resized')
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+window.addEventListener('resize', onWindowResize, false);
+
+function animate() {
+  stats.begin();
+  pen.update()
+  render()
+  stats.end();
+
+  requestAnimationFrame(animate);
+}
+
+function dist(bsphere, camera) {
+  // https://stackoverflow.com/a/64571830/133327
+
+  const vfov = camera.getEffectiveFOV();
+  const hfov = camera.fov * camera.aspect;
+  const fov = Math.min(vfov, hfov);
+
+  return Math.abs( bsphere.radius / Math.sin( fov * ( Math.PI / 180 ) / 2 ) )
+}
+
+function render() {
+	// shadowCameraHelper && shadowCameraHelper.update();
+
+
+  const center = sphereOfInterest && sphereOfInterest.center || pen.mesh.position
+
+  // the camera target the pen
+  controls.target.lerp(center, conf.cameraTargetLerp) // important: point the camera target BEFORE calculating dist()
+  // z to fit the sphere
+  const z = sphereOfInterest && dist(sphereOfInterest, camera) || conf.cameraZ
+
+  // position the camera back from the target
+  const normal = /*planeFrom3LastPoints?.normal ||*/ camera.getWorldDirection(new THREE.Vector3()).negate().normalize()
+  const altitude = normal.setLength(z) // altitude fitted-zoom vector
+  
+  camera.position.lerp(controls.target.clone().add(altitude), conf.cameraPositionLerp)
+  
+  controls && controls.update(); // required if controls.enableDamping or controls.autoRotate are set to true
+  renderer.render(scene, camera);
+}
+
+init();
+animate();
+</script>
+</body>
+</html>
