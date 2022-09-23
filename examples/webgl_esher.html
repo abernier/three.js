@@ -49,7 +49,7 @@
     </div></aside>
   </div>
   <div id="info">
-    <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> webgl - <a href="https://assetstore.unity.com/packages/3d/characters/humanoids/humans/kira-lowpoly-character-100303" target="_blank" rel="noopener">Kira</a>'s "<a href="https://en.wikipedia.org/wiki/Hand_with_Reflecting_Sphere" target="_blank" rel="noopener">hand with Reflecting Sphere</a>"
+    <a href="https://threejs.org/examples/#webgl_animation_skinning_ik" target="_blank" rel="noopener">three.js</a> - "<a href="https://en.wikipedia.org/wiki/Hand_with_Reflecting_Sphere" target="_blank" rel="noopener">hand with Reflecting Sphere</a>"
   </div>
 
 <!-- Import maps polyfill -->
@@ -358,7 +358,7 @@ async function init() {
     if (n.name === 'target_hand_l') OOI.target_hand_l = n
 
     if (n.name === 'boule') OOI.boule = n
-    if (n.name === 'Kira_Shirt') OOI.kira = n
+    if (n.name === 'Kira_Shirt_left') OOI.kira = n
 
     if (n.isBone) {
       // console.log('🦴', n.name)
@@ -467,27 +467,18 @@ async function init() {
     
     const iks = [
       {
-        target: 25, // "target_hand_l"
-        effector: 9, // "hand_l"
+        target: 22, // "target_hand_l"
+        effector: 6, // "hand_l"
         links: [
-          
           {
-            index: 7, // "Upperarm_l"
-            // limitation: new THREE.Vector3(1, 0, 1), // 
-            rotationMin: new THREE.Vector3( 0.1,  -0.7, -1.8),
-            rotationMax: new THREE.Vector3( 1.1,  0, -1.4)
+            index: 5, // "lowerarm_l"
+            rotationMin: new THREE.Vector3( 1.2, - 1.8, - .4 ),
+            rotationMax: new THREE.Vector3( 1.7, - 1.1, .3 )
           },
           {
-            index: 8, // "lowerarm_l"
-            // limitation: new THREE.Vector3( 0, 0, 1 ),
-            rotationMin: new THREE.Vector3(1.2,  -1.8, -.4),
-            rotationMax: new THREE.Vector3(1.7,  -1.1, .3)
-          },
-          {
-            index: 9, // "hand_l"
-            // limitation: new THREE.Vector3( 0, 0, 1 ),
-            rotationMin: new THREE.Vector3(0,  -.5, 0.3),
-            rotationMax: new THREE.Vector3(0,  -.5, .3)
+            index: 4, // "Upperarm_l"
+            rotationMin: new THREE.Vector3( 0.1, - 0.7, - 1.8 ),
+            rotationMax: new THREE.Vector3( 1.1, 0, - 1.4 )
           },
         ],
         // iteration: 15,
@@ -499,7 +490,7 @@ async function init() {
     window.IKSolver = IKSolver;
 
     if (debug) {
-      const ccdikhelper = new CCDIKHelper(OOI.kira, iks, {sphereSize: .01})
+      const ccdikhelper = new CCDIKHelper(OOI.kira, iks, .01)
       scene.add(ccdikhelper);
     }
 
