@@ -100,12 +100,10 @@ import transmission_pars_fragment from './ShaderChunk/transmission_pars_fragment
 import uv_pars_fragment from './ShaderChunk/uv_pars_fragment.glsl.js';
 import uv_pars_vertex from './ShaderChunk/uv_pars_vertex.glsl.js';
 import uv_vertex from './ShaderChunk/uv_vertex.glsl.js';
-import uv2_pars_fragment from './ShaderChunk/uv2_pars_fragment.glsl.js';
-import uv2_pars_vertex from './ShaderChunk/uv2_pars_vertex.glsl.js';
-import uv2_vertex from './ShaderChunk/uv2_vertex.glsl.js';
 import worldpos_vertex from './ShaderChunk/worldpos_vertex.glsl.js';
 
 import * as background from './ShaderLib/background.glsl.js';
+import * as backgroundCube from './ShaderLib/backgroundCube.glsl.js';
 import * as cube from './ShaderLib/cube.glsl.js';
 import * as depth from './ShaderLib/depth.glsl.js';
 import * as distanceRGBA from './ShaderLib/distanceRGBA.glsl.js';
@@ -225,13 +223,12 @@ export const ShaderChunk = {
 	uv_pars_fragment: uv_pars_fragment,
 	uv_pars_vertex: uv_pars_vertex,
 	uv_vertex: uv_vertex,
-	uv2_pars_fragment: uv2_pars_fragment,
-	uv2_pars_vertex: uv2_pars_vertex,
-	uv2_vertex: uv2_vertex,
 	worldpos_vertex: worldpos_vertex,
 
 	background_vert: background.vertex,
 	background_frag: background.fragment,
+	backgroundCube_vert: backgroundCube.vertex,
+	backgroundCube_frag: backgroundCube.fragment,
 	cube_vert: cube.vertex,
 	cube_frag: cube.fragment,
 	depth_vert: depth.vertex,

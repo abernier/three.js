@@ -1,43 +1,168 @@
+import { Uint32BufferAttribute, Uint16BufferAttribute } from 'three';
+
+function arrayNeedsUint32( array ) {
+
+	// assumes larger values usually on last
+
+	for ( let i = array.length - 1; i >= 0; -- i ) {
+
+		if ( array[ i ] >= 65535 ) return true; // account for PRIMITIVE_RESTART_FIXED_INDEX, #24565
+
+	}
+
+	return false;
+
+}
+
+function getWireframeVersion( geometry ) {
+
+	return ( geometry.index !== null ) ? geometry.index.version : geometry.attributes.position.version;
+
+}
+
+function getWireframeIndex( geometry ) {
+
+	const indices = [];
+
+	const geometryIndex = geometry.index;
+	const geometryPosition = geometry.attributes.position;
+
+	if ( geometryIndex !== null ) {
+
+		const array = geometryIndex.array;
+
+		for ( let i = 0, l = array.length; i < l; i += 3 ) {
+
+			const a = array[ i + 0 ];
+			const b = array[ i + 1 ];
+			const c = array[ i + 2 ];
+
+			indices.push( a, b, b, c, c, a );
+
+		}
+
+	} else {
+
+		const array = geometryPosition.array;
+
+		for ( let i = 0, l = ( array.length / 3 ) - 1; i < l; i += 3 ) {
+
+			const a = i + 0;
+			const b = i + 1;
+			const c = i + 2;
+
+			indices.push( a, b, b, c, c, a );
+
+		}
+
+	}
+
+	const attribute = new ( arrayNeedsUint32( indices ) ? Uint32BufferAttribute : Uint16BufferAttribute )( indices, 1 );
+	attribute.version = getWireframeVersion( geometry );
+
+	return attribute;
+
+}
+
 class WebGPUGeometries {
 
-	constructor( attributes, info ) {
+	constructor( attributes, properties, info ) {
 
 		this.attributes = attributes;
+		this.properties = properties;
 		this.info = info;
 
-		this.geometries = new WeakMap();
+		this.wireframes = new WeakMap();
+		this.geometryFrame = new WeakMap();
 
 	}
 
-	has( geometry ) {
+	has( renderObject ) {
 
-		return this.geometries.has( geometry );
+		const geometry = renderObject.geometry;
+
+		return this.properties.has( geometry ) && this.properties.get( geometry ).initialized === true;
 
 	}
 
-	update( geometry ) {
+	update( renderObject ) {
 
-		if ( this.geometries.has( geometry ) === false ) {
+		if ( this.has( renderObject ) === false ) this.initGeometry( renderObject );
 
-			const disposeCallback = onGeometryDispose.bind( this );
+		this.updateFrameAttributes( renderObject );
 
-			this.geometries.set( geometry, disposeCallback );
+	}
 
-			this.info.memory.geometries ++;
+	initGeometry( renderObject ) {
 
-			geometry.addEventListener( 'dispose', disposeCallback );
+		const geometry = renderObject.geometry;
+		const geometryProperties = this.properties.get( geometry );
+
+		geometryProperties.initialized = true;
+
+		const dispose = () => {
+
+			this.info.memory.geometries --;
+
+			const index = geometry.index;
+			const geometryAttributes = renderObject.getAttributes();
+
+			if ( index !== null ) {
+
+				this.attributes.remove( index );
+
+			}
+
+			for ( const geometryAttribute of geometryAttributes ) {
+
+				this.attributes.remove( geometryAttribute );
+
+			}
+
+			const wireframeAttribute = this.wireframes.get( geometry );
+
+			if ( wireframeAttribute !== undefined ) {
+
+				this.attributes.remove( wireframeAttribute );
+
+			}
+
+			geometry.removeEventListener( 'dispose', dispose );
+
+		};
+
+		this.info.memory.geometries ++;
+
+		geometry.addEventListener( 'dispose', dispose );
+
+	}
+
+	updateFrameAttributes( renderObject ) {
+
+		const frame = this.info.render.frame;
+		const geometry = renderObject.geometry;
+
+		if ( this.geometryFrame.get( geometry ) !== frame ) {
+
+			this.updateAttributes( renderObject );
+
+			this.geometryFrame.set( geometry, frame );
 
 		}
 
-		const geometryAttributes = geometry.attributes;
+	}
 
-		for ( const name in geometryAttributes ) {
+	updateAttributes( renderObject ) {
 
-			this.attributes.update( geometryAttributes[ name ] );
+		const attributes = renderObject.getAttributes();
+
+		for ( const attribute of attributes ) {
+
+			this.attributes.update( attribute );
 
 		}
 
-		const index = geometry.index;
+		const index = this.getIndex( renderObject );
 
 		if ( index !== null ) {
 
@@ -47,33 +172,39 @@ class WebGPUGeometries {
 
 	}
 
-}
+	getIndex( renderObject ) {
 
-function onGeometryDispose( event ) {
+		const { geometry, material } = renderObject;
 
-	const geometry = event.target;
-	const disposeCallback = this.geometries.get( geometry );
+		let index = geometry.index;
 
-	this.geometries.delete( geometry );
+		if ( material.wireframe === true ) {
 
-	this.info.memory.geometries --;
+			const wireframes = this.wireframes;
 
-	geometry.removeEventListener( 'dispose', disposeCallback );
+			let wireframeAttribute = wireframes.get( geometry );
 
-	//
+			if ( wireframeAttribute === undefined ) {
 
-	const index = geometry.index;
-	const geometryAttributes = geometry.attributes;
+				wireframeAttribute = getWireframeIndex( geometry );
 
-	if ( index !== null ) {
+				wireframes.set( geometry, wireframeAttribute );
 
-		this.attributes.remove( index );
+			} else if ( wireframeAttribute.version !== getWireframeVersion( geometry ) ) {
 
-	}
+				this.attributes.remove( wireframeAttribute );
 
-	for ( const name in geometryAttributes ) {
+				wireframeAttribute = getWireframeIndex( geometry );
 
-		this.attributes.remove( geometryAttributes[ name ] );
+				wireframes.set( geometry, wireframeAttribute );
+
+			}
+
+			index = wireframeAttribute;
+
+		}
+
+		return index;
 
 	}
 
